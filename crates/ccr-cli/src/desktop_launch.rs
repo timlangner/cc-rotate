@@ -11,7 +11,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
-use ccr_core::desktop;
+use ccr_core::{desktop, relay};
 
 use crate::process;
 
@@ -29,12 +29,18 @@ pub fn run(profile: Option<PathBuf>, command: Vec<OsString>) -> ExitCode {
             .and_then(|rotate| Ok((rotate, ccr_core::paths::home_dir()?)));
         match resolved {
             Ok((rotate, home)) => {
-                let plan = desktop::plan_launch(args, var, &rotate, &home);
+                let cfg = relay::launch_config_logged("desktop-launch");
+                let relay_env = cfg.as_ref().map(relay::session_env);
+                let plan = desktop::plan_launch(args, var, &rotate, &home, relay_env);
                 for name in &plan.remove {
                     cmd.env_remove(name);
                 }
                 if let Some(dir) = &plan.config_dir {
                     cmd.env("CLAUDE_CONFIG_DIR", dir);
+                }
+                cmd.envs(plan.set.iter().map(|(k, v)| (k, v)));
+                if let (false, Some(cfg)) = (plan.set.is_empty(), &cfg) {
+                    relay::ensure_running("desktop-launch", cfg);
                 }
             }
             Err(e) => process::log_error("desktop-launch", &e),
