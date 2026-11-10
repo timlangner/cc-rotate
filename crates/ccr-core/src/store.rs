@@ -2209,6 +2209,7 @@ impl Store {
     ///
     /// `note_session_cost_for_project` files that same increase under `project`, the folder
     /// Claude Code was launched in. A tick that adds nothing still records the session there.
+    #[allow(clippy::too_many_arguments)]
     pub fn note_session_cost_for_project(
         &self,
         session_id: &str,
@@ -2267,6 +2268,7 @@ impl Store {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn record_session_cost(
         &self,
         session_id: &str,
