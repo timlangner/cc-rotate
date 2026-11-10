@@ -354,5 +354,6 @@ fn relay_mode_without_its_config_starts_without_the_relay_and_says_nothing() {
     assert!(!parse(&out).contains_key("ANTHROPIC_BASE_URL"));
     assert!(out.stderr.is_empty());
     let log = std::fs::read_to_string(root.path().join("data/logs/cc-rotate.log")).unwrap();
-    assert!(log.contains("relay"), "{log}");
+    assert!(log.contains("the app account is on but"), "{log}");
+    assert!(log.contains("relay.json does not exist"), "{log}");
 }
