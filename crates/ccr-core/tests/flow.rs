@@ -254,7 +254,8 @@ fn scheduler_follows_the_order_and_skips_exhausted() {
         }
     );
 
-    store.record_sample(&sample(a, 10.0, 98.5)).unwrap();
+    // a is at its weekly limit (weekly limits swap at 100%), so every account is used up.
+    store.record_sample(&sample(a, 10.0, 100.0)).unwrap();
     let before = env.file_doc();
     assert_eq!(
         swap::run(&store, &env.paths, &manual(None)).unwrap(),
