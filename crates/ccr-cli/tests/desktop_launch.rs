@@ -357,3 +357,34 @@ fn relay_mode_without_its_config_starts_without_the_relay_and_says_nothing() {
     assert!(log.contains("the app account is on but"), "{log}");
     assert!(log.contains("relay.json does not exist"), "{log}");
 }
+
+/// A new desktop session's transcript, written once Claude Code has started, is linked into the
+/// app's profile, so the app still finds it after it restarts.
+#[cfg(unix)]
+#[test]
+fn a_new_sessions_transcript_is_linked_into_the_app_profile() {
+    let root = tempfile::tempdir().unwrap();
+    let profile = root.path().join("rotate profile");
+    let line = r#"{"type":"user","entrypoint":"claude-desktop"}"#;
+    let script = format!(
+        "sleep 1; d=\"$CLAUDE_CONFIG_DIR/projects/-Users-me-project\"; mkdir -p \"$d/new-id\"; \
+         echo '{line}' > \"$d/new-id.jsonl\"; sleep 5"
+    );
+    let program = ["/bin/sh".to_string(), "-c".to_string(), script];
+    let started = std::time::Instant::now();
+    let out = launch(root.path(), profile.to_str().unwrap(), true, &program);
+    assert!(out.status.success(), "{out:?}");
+    // The launcher waited for nothing: Claude Code ran its course.
+    assert!(started.elapsed() >= std::time::Duration::from_secs(6));
+
+    let folder = root.path().join("app profile/projects/-Users-me-project");
+    let pool = profile.join("projects/-Users-me-project");
+    assert_eq!(
+        std::fs::read_link(folder.join("new-id.jsonl")).unwrap(),
+        pool.join("new-id.jsonl")
+    );
+    assert_eq!(
+        std::fs::read_link(folder.join("new-id")).unwrap(),
+        pool.join("new-id")
+    );
+}
