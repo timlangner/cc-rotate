@@ -2047,6 +2047,65 @@ fn a_weekly_budget_that_would_reset_unused_moves_its_account_ahead() {
     assert!((marked - week_reset).abs() <= 5, "{marked} vs {week_reset}");
 }
 
+/// The models sessions sent requests for decide which model-scoped limits count, not only the
+/// model the status line saw last: desktop sessions run no status line, so while one uses Fable
+/// through the proxy, an account at its Fable limit is not picked.
+#[test]
+fn an_account_at_its_fable_limit_is_skipped_while_a_session_uses_fable() {
+    let env = Env::new();
+    let (store, a, b, c) = pool(&env);
+    store.set_setting("strict_order", Some("true")).unwrap();
+    store.set_order(&[a, b, c]).unwrap();
+    // A terminal session's status line last saw Opus.
+    store
+        .set_meta(swap::META_PROFILE_MODEL, "claude-opus-5-5")
+        .unwrap();
+    let with_fable = |account, fable| Sample {
+        windows: vec![
+            window("five_hour", 10.0, time::now_s() + 3600),
+            window("seven_day", 40.0, time::now_s() + 86_400 * 3),
+            window("seven_day_fable", fable, time::now_s() + 86_400 * 3),
+        ],
+        ..sample(account, 10.0, 40.0)
+    };
+    store.record_sample(&sample(a, 10.0, 40.0)).unwrap();
+    store.record_sample(&with_fable(b, 100.0)).unwrap();
+    store.record_sample(&with_fable(c, 20.0)).unwrap();
+    assert_eq!(
+        swap::next_target(&store, Some(a)).unwrap().unwrap().id,
+        b,
+        "on Opus alone, b's Fable limit does not count"
+    );
+
+    // A desktop session sends a Fable request through the proxy.
+    let relayed = |pct, ts, model: &str| Sample {
+        ts,
+        profile: "relay".into(),
+        session_id: Some("desktop-1".into()),
+        model: Some(model.into()),
+        ..sample(a, pct, 40.0)
+    };
+    let now = time::now_ms();
+    store
+        .record_sample(&relayed(12.0, now, "claude-fable-5-2"))
+        .unwrap();
+    assert_eq!(
+        swap::next_target(&store, Some(a)).unwrap().unwrap().id,
+        c,
+        "b is at its Fable limit"
+    );
+    // Its next request goes out on Opus a minute later: Fable is still in use.
+    store
+        .record_sample(&relayed(13.0, now + 60_000, "claude-opus-5-5"))
+        .unwrap();
+    assert_eq!(swap::next_target(&store, Some(a)).unwrap().unwrap().id, c);
+    // Nothing sent Fable in the hour before the latest request: b is back.
+    store
+        .record_sample(&relayed(14.0, now + 3_600_000 + 1, "claude-opus-5-5"))
+        .unwrap();
+    assert_eq!(swap::next_target(&store, Some(a)).unwrap().unwrap().id, b);
+}
+
 /// A ready account's weekly budget must not expire while a later-resetting account keeps
 /// running below its limits.
 #[test]

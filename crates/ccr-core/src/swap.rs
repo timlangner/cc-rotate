@@ -680,9 +680,26 @@ pub fn login_written_at(store: &Store) -> Result<i64> {
         .unwrap_or(0)
         .max(active_since(store)?))
 }
-/// The model id the rotation profile's sessions last reported, which decides whether a window
-/// scoped to one model family applies.
+/// The model id the rotation profile's sessions last reported in their status line. The models
+/// in use (`models_in_use`) fall back to it.
 pub const META_PROFILE_MODEL: &str = "profile_model_seen";
+/// A model counts as in use while a request for it came within this long of the latest request.
+pub const MODELS_IN_USE_MS: i64 = 3_600_000;
+
+/// The models sessions are using, which decide whether a window scoped to one model family
+/// applies (`scheduler::WindowSpec::applies_to_any`): every model a reading came back for
+/// within `MODELS_IN_USE_MS` of the latest one. The proxy records the model of each request it
+/// relays and the status line its session's, so desktop sessions, which run no status line,
+/// count too, and so does each model one session mixes (a Fable main loop with Haiku helpers).
+/// Measured from the latest reading rather than now, so a pause does not forget them. Before
+/// any reading names a model, the one the status line saw last.
+pub fn models_in_use(store: &Store) -> Result<Vec<String>> {
+    let models = store.recent_models(MODELS_IN_USE_MS)?;
+    if !models.is_empty() {
+        return Ok(models);
+    }
+    Ok(store.meta(META_PROFILE_MODEL)?.into_iter().collect())
+}
 /// The credentials change marker (`Credentials::change_marker`) last seen. Named for the file
 /// modification time the marker once was.
 pub const META_CRED_SEEN: &str = "cred_mtime_seen";
@@ -723,7 +740,7 @@ pub enum SwapOutcome {
 /// from the settings.
 pub fn load_pool(store: &Store, now_s: i64) -> Result<(Vec<Candidate>, Policy)> {
     let policy = Policy::from(&store.settings()?);
-    let model = store.meta(META_PROFILE_MODEL)?;
+    let models = models_in_use(store)?;
     let accounts = store.accounts()?;
     // Places in the order; accounts at the same position (stores upgraded from `priority`,
     // which was usually 0 for all) share a place.
@@ -737,13 +754,13 @@ pub fn load_pool(store: &Store, now_s: i64) -> Result<(Vec<Candidate>, Policy)> 
             .unwrap_or_default();
         let sample = store.current_usage(account.id)?;
         let thresholds = policy.thresholds.for_account(&account);
-        let windows = scheduler::window_usage(sample.as_ref(), now_s, thresholds, model.as_deref());
+        let windows = scheduler::window_usage(sample.as_ref(), now_s, thresholds, &models);
         let stop_hold_until = stop_hold_until(
             store,
             account.id,
             sample.as_ref(),
             thresholds,
-            model.as_deref(),
+            &models,
             now_s * 1000,
         )?;
         let detected = detect_weekly_limit(store, account.id, now_s)?;
@@ -805,7 +822,7 @@ pub fn stop_hold_until(
     account_id: i64,
     latest: Option<&Sample>,
     thresholds: scheduler::Thresholds,
-    model: Option<&str>,
+    models: &[String],
     now_ms: i64,
 ) -> Result<Option<i64>> {
     let Some(left) = store.meta_i64(&left_at_stop_key(account_id))? else {
@@ -821,8 +838,9 @@ pub fn stop_hold_until(
     };
     if let Some(s) = &at_stop {
         // As the session that sent it saw it: a window scoped to its model applied to it.
-        let model = s.model.as_deref().or(model);
-        let shown = scheduler::window_usage(Some(s), s.ts / 1000, thresholds, model)
+        let own = s.model.clone().map(|m| vec![m]);
+        let models = own.as_deref().unwrap_or(models);
+        let shown = scheduler::window_usage(Some(s), s.ts / 1000, thresholds, models)
             .iter()
             .any(|w| w.blocking());
         if shown {
@@ -1085,7 +1103,7 @@ pub fn arrived_over_limit(store: &Store, account_id: i64, now_ms: i64) -> Result
         Some(account) => policy.thresholds.for_account(&account),
         None => policy.thresholds,
     };
-    let model = store.meta(META_PROFILE_MODEL)?;
+    let models = models_in_use(store)?;
     let mut others: Vec<i64> = Vec::new();
     for account in store.accounts()? {
         if account.id != account_id
@@ -1106,7 +1124,7 @@ pub fn arrived_over_limit(store: &Store, account_id: i64, now_ms: i64) -> Result
         .collect();
     Ok(!own.is_empty()
         && own.iter().all(|s| {
-            scheduler::window_usage(Some(s), now_ms / 1000, thresholds, model.as_deref())
+            scheduler::window_usage(Some(s), now_ms / 1000, thresholds, &models)
                 .iter()
                 .any(scheduler::WindowUsage::blocking)
         }))
