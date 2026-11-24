@@ -167,8 +167,12 @@ pub fn app_profile(var: impl Fn(&str) -> Option<OsString>, home: &Path) -> PathB
         .unwrap_or_else(|| home.join(".claude"))
 }
 
-/// How much of a transcript is read to find where its session was started.
-const ENTRYPOINT_HEAD: u64 = 64 * 1024;
+/// How much of a transcript is read, at most, to find where its session was started. A session
+/// the app resumes under a new id begins its transcript with the old one's metadata (file-history
+/// snapshots and the like), which can run far past the first message's usual place. The read
+/// stops at the first line that names an entrypoint, so this much is read only for a transcript
+/// that has none yet.
+const ENTRYPOINT_HEAD: u64 = 16 * 1024 * 1024;
 
 /// Link, into the app's profile, the transcripts of desktop sessions that ran on the pool, and
 /// return the links made.
@@ -238,16 +242,23 @@ pub fn link_app_transcripts(rotate_profile: &Path, app_profile: &Path) -> Vec<Pa
 /// Whether the session of the transcript at `path` was started by the desktop app.
 #[cfg(unix)]
 fn started_by_the_app(path: &Path) -> bool {
-    use std::io::Read;
-    let mut head = Vec::new();
-    let read =
-        std::fs::File::open(path).and_then(|f| f.take(ENTRYPOINT_HEAD).read_to_end(&mut head));
-    if read.is_err() {
+    use std::io::{BufRead, Read};
+    let Ok(file) = std::fs::File::open(path) else {
         return false;
+    };
+    let mut reader = std::io::BufReader::new(file.take(ENTRYPOINT_HEAD));
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) | Err(_) => return false,
+            Ok(_) => {}
+        }
+        let text = String::from_utf8_lossy(&line);
+        if let Some(at) = text.find("\"entrypoint\":\"") {
+            return text[at..].starts_with("\"entrypoint\":\"claude-desktop\"");
+        }
     }
-    let head = String::from_utf8_lossy(&head);
-    head.find("\"entrypoint\":\"")
-        .is_some_and(|at| head[at..].starts_with("\"entrypoint\":\"claude-desktop\""))
 }
 
 // ---- Turning it on and off (spec section 24.2) ------------------------------------------------
@@ -1358,6 +1369,25 @@ mod link_tests {
 
         assert!(link_app_transcripts(&rotate, &app).is_empty());
         assert!(!app.join("projects").join(FOLDER).exists());
+    }
+
+    #[test]
+    fn a_resumed_transcript_with_a_long_head_is_linked() {
+        // A session the app resumes under a new id starts its transcript with the old one's
+        // metadata (file-history snapshots and the like), so the first message, and with it the
+        // entrypoint, can come well past the first 64 KiB.
+        let root = tempfile::tempdir().unwrap();
+        let (rotate, app) = (root.path().join("rotate"), root.path().join("app"));
+        let snapshot = format!(
+            r#"{{"type":"file-history-snapshot","snapshot":"{}"}}"#,
+            "x".repeat(3000)
+        );
+        let head = vec![snapshot; 40].join("\n");
+        let file = pool_transcript(&rotate, "abc", &format!("{head}\n{DESKTOP_LINE}"));
+
+        let link = app.join("projects").join(FOLDER).join("abc.jsonl");
+        assert_eq!(link_app_transcripts(&rotate, &app), vec![link.clone()]);
+        assert_same_file(&link, &file);
     }
 
     #[test]
