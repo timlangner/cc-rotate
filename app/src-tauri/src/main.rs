@@ -81,12 +81,35 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("error while building cc-rotate")
-        .run(|app, event| {
-            if let RunEvent::Exit = event {
-                login_flow::stop_all(app);
-            }
+        .run(|app, event| match event {
+            RunEvent::Ready => set_dock_icon(),
+            RunEvent::Exit => login_flow::stop_all(app),
+            _ => {}
         });
 }
+
+/// The Dock icon on macOS. The app runs as a plain executable, not an app bundle, so macOS has
+/// no bundle icon to show and would show the generic executable's; Tauri sets the icon itself
+/// only in development builds. This does what Tauri does there, with the same image.
+#[cfg(target_os = "macos")]
+fn set_dock_icon() {
+    use objc2::AllocAnyThread;
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::{MainThreadMarker, NSData};
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let data = NSData::with_bytes(include_bytes!("../icons/icon.png"));
+    let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) else {
+        return;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    unsafe { app.setApplicationIconImage(Some(&image)) };
+}
+
+#[cfg(not(target_os = "macos"))]
+fn set_dock_icon() {}
 
 /// The app is the only source of notifications, so it starts at login unless the user turned
 /// that off. The first launch of an installed copy enables it; later launches respect the user's
