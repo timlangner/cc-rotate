@@ -314,11 +314,7 @@ fn remove_refuses_the_app_account() {
         let store = ccr_core::Store::open(&data.join("store.db")).unwrap();
         let add = |label: &str, state| {
             store
-                .insert_account(
-                    label,
-                    &ccr_core::store::AccountIdentity::default(),
-                    state,
-                )
+                .insert_account(label, &ccr_core::store::AccountIdentity::default(), state)
                 .unwrap()
         };
         let a = add("a", ccr_core::store::AccountState::Parked);
@@ -345,15 +341,21 @@ fn remove_refuses_the_app_account() {
     assert!(exists(a));
 
     // Another account is the app account.
-    ccr_core::relay::set_mode(&ccr_core::Store::open(&data.join("store.db")).unwrap(), Some(c))
-        .unwrap();
+    ccr_core::relay::set_mode(
+        &ccr_core::Store::open(&data.join("store.db")).unwrap(),
+        Some(c),
+    )
+    .unwrap();
     let out = ctl(&data, &["remove", "a", "--yes"]);
     assert!(out.status.success(), "{out:?}");
     assert!(!exists(a));
 
     // The app account is off.
-    ccr_core::relay::set_mode(&ccr_core::Store::open(&data.join("store.db")).unwrap(), None)
-        .unwrap();
+    ccr_core::relay::set_mode(
+        &ccr_core::Store::open(&data.join("store.db")).unwrap(),
+        None,
+    )
+    .unwrap();
     let out = ctl(&data, &["remove", "c", "--yes"]);
     assert!(out.status.success(), "{out:?}");
     assert!(!exists(c));
